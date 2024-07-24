@@ -33,7 +33,7 @@ def get_latest(targdir, qualifier=lambda x: True):
             key=lambda path: int(path.split("/")[-1].split("_")[1]),
         )
         return os.path.join(targdir, latest)
-    return None
+    return None # should return ""? otherwise it will not be joinable via os.path.join()
 
 
 def get_oldest(targdir, qualifier=lambda x: True):
@@ -51,6 +51,50 @@ def get_oldest(targdir, qualifier=lambda x: True):
         return os.path.join(targdir, oldest)
     return None
 
+def has_checkpoints_in_save_path(cfg,rank) -> bool:
+    '''
+    There are cases that cfg.ckpt_save_path is different from cfg.ckpt_load_path.
+    They can be: (1) when the model was first trained on an datasetA and saved its checkpoints to cfg.ckpt_load_path
+    and now its latest checkpoint is loaded in to train on a completely new datasetB and save to cfg.ckpt_save_path.
+    (2) when disk for cfg.ckpt_load_path is fulled.
+
+    For (1): No dataset checkpoints should be found (i.e., No files having substr "loader_"), i.e., training the model must
+    be done completely (no training data left); For (2): there are dataset checkpoints (having files with "loader_")
+
+    This function is to check whether there are already any checkpoints in cfg.ckpt_save_path.
+    If so, the continuous training can bypass checkpoints in cfg.ckpt_load_path
+    and continue training the model from the latest checkpoint in cfg.ckpt_save_path.
+
+    '''
+
+    save_path = os.path.join(cfg.ckpt_save_path, "checkpoints")
+    
+    # no `/checkpoints` folder or it has no subfolders:
+    if not os.path.exists(save_path) or len(os.listdir(save_path)) == 0:
+        if rank==0:
+            print(f"\n== `{save_path}` either does not exist or has no subfolders!")
+        return False
+
+    # get_latest(save_path) can return None and not joinable:
+    if get_latest(save_path) is not None:
+        latest = os.path.join(save_path, get_latest(save_path))
+    else:
+        if rank==0:
+            print(f"\n== `{save_path}` has no `step_xyz_ckpt` subfolder!")
+        return False
+        
+
+    if os.path.isfile(latest):
+        if rank==0:
+            print(f"\n== `{latest}` is a file, not a folder!")
+        return False
+    
+    if len([x for x in os.listdir(latest) if "loader_" in x]) == 0:
+        if rank==0:
+            print(f"\n== No dataset checkpoint is found at `{latest}`!")
+        return False
+    
+    return True
 
 class Checkpointer:
     """

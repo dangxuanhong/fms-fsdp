@@ -23,7 +23,6 @@ def update_config(config, **kwargs):
 
 
 def get_model_config(model_variant):
-
     if model_variant == "llama2_70b":
         llama_config = LLaMAConfig(
             emb_dim=8192,
@@ -50,23 +49,6 @@ def get_model_config(model_variant):
         )
     elif model_variant == "llama2_7b":
         llama_config = LLaMAConfig()
-    elif model_variant == "llama2mod_starcoder":
-        # llama2 1.4B with starcoder
-        llama_config = LLaMAConfig(
-            src_vocab_size=49152,
-            emb_dim=2048,
-            nheads=16,
-            nlayers=24,
-            max_expected_seq_len=8192,
-        )
-    elif model_variant == "llama2_starcoder":
-        llama_config = LLaMAConfig(
-            src_vocab_size=49152,
-            emb_dim=2048,
-            nheads=16,
-            nlayers=24,
-            max_expected_seq_len=8192,
-        )
     elif model_variant == "llama2_1.4b":
         llama_config = LLaMAConfig(
             emb_dim=2048,
@@ -103,16 +85,6 @@ def get_model_config(model_variant):
             hidden_grow_factor=3.5,
             max_expected_seq_len=8192,
         )
-    elif model_variant == "llama3_starcoder":
-        llama_config = LLaMAConfig(
-            src_vocab_size=49152,
-            emb_dim=2048,
-            nheads=16,
-            kvheads=8,
-            nlayers=24,
-            hidden_grow_factor=3.5,
-            max_expected_seq_len=8192,
-        )
     elif model_variant == "llama3_1.8b_4k":
         llama_config = LLaMAConfig(
             src_vocab_size=128256,
@@ -121,6 +93,26 @@ def get_model_config(model_variant):
             kvheads=8,
             nlayers=24,
             hidden_grow_factor=3.5,
+            max_expected_seq_len=4096,
+        )
+    elif model_variant == "llama3_3.2b":
+        llama_config = LLaMAConfig(
+            src_vocab_size=128256,
+            emb_dim=3072,
+            nheads=24,
+            kvheads=8,
+            nlayers=24,
+            hidden_grow_factor=8 / 3,
+            max_expected_seq_len=8192,
+        )
+    elif model_variant == "llama3_3.2b_4k":
+        llama_config = LLaMAConfig(
+            src_vocab_size=128256,
+            emb_dim=3072,
+            nheads=24,
+            kvheads=8,
+            nlayers=24,
+            hidden_grow_factor=8 / 3,
             max_expected_seq_len=4096,
         )
     elif model_variant == "llama3_70b":
@@ -143,9 +135,6 @@ def get_model_config(model_variant):
             hidden_grow_factor=3.5,
             max_expected_seq_len=4096,
         )
-    elif model_variant == "llama2_7b":
-        #== quicktest/default model
-        llama_config = LLaMAConfig()
     else:
         raise ValueError(f"model variant {model_variant} not supported.")
 

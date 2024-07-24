@@ -324,34 +324,24 @@ class Checkpoint_Dataset(_Wrapper_Dataset):
         # If path does not exist, or exists but is empty, exit early
         if not os.path.exists(path) or len(os.listdir(path)) == 0:
             self.report(
-                f"  Dataset: No valid checkpoint detected at {path}, dataset starting from scratch."
+                f"No valid checkpoint detected at {path}, dataset starting from scratch."
             )
             return
         # Grab latest item in path
         latest = os.path.join(path, get_latest(path))
-        self.report(f"Checkpoint detected at {latest}")
+        self.report(f"Dataset checkpoint detected at {latest}")
         # If item is not a folder, exit early
         if os.path.isfile(latest):
             self.report(
-                f"  Dataset: Detected checkpoint {latest} is a single file with no dataset info."
-                + " Dataset starting from scratch."
+                f"Checkpoint exists but contains no dataset! Dataset starting from scratch."
             )
             return
-        # If item is a folder, check that it contains shard files
-        if len([x for x in os.listdir(latest) if "loader" in x]) == 0:
-            # chkpt exits but no chkpt for DS: model was finished training 
-            self.report(
-                f"  Dataset: Detected checkpoint {latest} exists but contains no dataset checkpoints."
-                + " Dataset starting from scratch."
-            )
-            return
-        # All checks passed, get the step count
+        # If item is a folder, get the step count
         self.step = int(latest.split("_")[-2])
         # Proceed
         start = time.time()
-        self.report(f"\n\n== Existing checkpoint is valid at `{latest}`, start loading its dataloader ....")
         self.dataset.load_from_path(latest)
-        self.report(f"  Dataset: Checkpoint loaded! Load time: {time.time() - start}")
+        self.report(f"Dataset checkpoint loaded! Load time: {time.time() - start}")
 
 
 class Preload_Buffer_Dataset(_Wrapper_Dataset):
@@ -592,9 +582,6 @@ class Streaming_Doc_Dataset(_Stateful_Dataset):
         verbose: bool = False,
         shuffle: bool = True,
     ):
-
-        # print(f"\n**** datapath: {datapath} ***\n\n") # eg, datapath='/proj/data-eng/fsdp/data/R83b/CC-MAIN-2023-14'
-
         super(Streaming_Doc_Dataset, self).__init__(rank, worldsize)
         self.seed = seed
         self.data = datapath
@@ -619,81 +606,42 @@ class Streaming_Doc_Dataset(_Stateful_Dataset):
             for x in os.listdir(os.path.join(os.path.dirname(datapath), "meta"))
             if "counts" in x and "csv" in x
         ]
-        assert len(countfiles) == 1, 'There are more than 1 .csv with `counts` filename found in `{datapath}`!'
+        assert len(countfiles) == 1
         doc_counts = {}
         pathsplit = (datapath, "")
         while len(pathsplit[1]) == 0:
             pathsplit = os.path.split(pathsplit[0])
         pardir, dataset = pathsplit
         self.dataset = dataset
-
-        '''
-        Retrieve a dictionary of token count per arrow file for a given `dataset`,eg:
-        Given dataset='CC-MAIN-2023-14' derived from datapath='/proj/data-eng/fsdp/data/R83b/CC-MAIN-2023-14'
-        An example of one entry of this dict is:
-            doc_counts[CC-MAIN-2023-14/003_00021_4.arrow]=42410
-        '''
-        #eg, dataset='CC-MAIN-2023-14'
         with open(os.path.join(pardir, "meta", countfiles[0]), "r") as csvfile:
             reader = csv.DictReader(csvfile)
             for row in reader:
                 fullpath = row["dataset/filename"]
-                prefix = fullpath.find("/" + dataset) + 1 # eg, search for `/CC-MAIN-2023-14`
+                prefix = fullpath.find("/" + dataset) + 1
                 if prefix > 0:
-                    key = fullpath[prefix:] #, eg, key=`CC-MAIN-2023-14/003_00021_4.arrow`
+                    key = fullpath[prefix:]
                     doc_counts[key] = int(row["documents"])
 
-                    # print(f"\n**** fullpath: {fullpath} \nprefix: {prefix} \nkey: {key} \ndoc_counts[key]: {doc_counts[key]}")
-
-        doc_counts = {key: doc_counts[key] for key in sorted(doc_counts)}
-        
         # Assemble document set owned by this worker:
         # listdir, assemble shardfraglist (ind -> shard, frag)
-        shards = []
-        for shard in os.listdir(datapath):
-            full_path = os.path.join(datapath, shard)
-            # print(f"\n**** shard: {shard} \nfullpath: {fullpath} ")
-            if os.path.isfile(full_path) and ".arrow" in full_path:
-                shards.append(shard)
-
-        # # DQA: Original version:
-        # shards = [
-        #     shard
-        #     for shard in os.listdir(datapath)
-        #     if os.path.isfile(os.path.join(datapath, shard))
-        #     and "arrow" in os.path.join(datapath, shard)
-        # ]
-        
+        shards = [
+            shard
+            for shard in os.listdir(datapath)
+            if os.path.isfile(os.path.join(datapath, shard))
+            and "arrow" in os.path.join(datapath, shard)
+        ]
         shards.sort()  # Ensure consistent sharding across machines
-        # print(f"\n** datapath `{datapath}` has {len(shards)} shards (arrow files). \nFirst/Last 3 shards: {shards[:3]} ... {shards[-3:]}")
-
         start_frag = (rank * worldsize * len(shards)) // worldsize
         end_frag = ((rank + 1) * worldsize * len(shards)) // worldsize
         shardfrags = [
             (shards[i // worldsize], i % worldsize) for i in range(start_frag, end_frag)
         ]
 
-        # print(f"\n** len(shardfrags): {len(shardfrags)} \nFirst/Last 3 shardfrags: {shardfrags[:3]} ... {shardfrags[-3:]}")
-
         # Read shardfrags, assemble doc list for each file shard (aggregating over fragments):
-
-        # print(f"\n** len(doc_counts): {len(doc_counts)}")
-        # for i,(k,v) in enumerate(doc_counts.items()):
-        #     print(f"{i:5d} doc_counts[{k}] : {v} ")
-        #     if i > 4: break
-
         ndocs = -1
         docset = {}  # shardid -> (min docid, max docid)
         for i, (shard, frag) in enumerate(shardfrags):
-            try:
-                ndocs = 0
-                ndocs = doc_counts[os.path.join(dataset, shard)]
-            except Exception as e:
-                if i%500==0:
-                    # Failed at 0'CC-MAIN-2024-10/003_00046_4.arrow', 'CC-MAIN-2024-10/003_00046_4.arrow' though they are both valid -> TODO: check doc_counts!
-                    print(f"\n** Skip as not found shard=`{shard}` frag=`{frag}`  in `doc_counts` dict (i={i} ndocs={ndocs}) due to:\n {str(e)}")
-                continue
-
+            ndocs = doc_counts[os.path.join(dataset, shard)]
             self.docs_per_shard[shard] = ndocs
             doc_start = (ndocs * frag) // worldsize
             doc_end = (ndocs * frag + ndocs) // worldsize - 1  # Inclusive upper bound
@@ -704,7 +652,7 @@ class Streaming_Doc_Dataset(_Stateful_Dataset):
                 docset[shard][0] = doc_start
             if doc_end > max_d:
                 docset[shard][1] = doc_end
-                
+
         # Add all of this dataset's shard entries to self.docset
         doccount = 0
         for shardid in docset:
@@ -949,9 +897,6 @@ class Sampling_Dataset(_Stateful_Dataset):
                 assert w > 0, f"Sampling rate {w} must be positive"
         self.weights = [1] * len(self.datasets) if weights is None else weights
         self.weights = [w / sum(self.weights) for w in self.weights]
-
-        if rank==0: 
-            print(f"\n== self.datasets: {self.datasets} self.weights: {self.weights}")
 
         self.tokens_seen = [0] * len(self.datasets)
 
